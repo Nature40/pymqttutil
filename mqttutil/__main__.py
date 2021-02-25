@@ -58,9 +58,12 @@ class Task:
         return result
 
     def publish(self):
-        result = self.exec()
-        logging.debug(f"publish {result} -> {self.mqtt_topic}")
-        self.mqtt_c.publish(self.mqtt_topic, result)
+        try:
+            result = self.exec()
+            logging.info(f"publish {result} -> {self.mqtt_topic}")
+            self.mqtt_c.publish(self.mqtt_topic, result)
+        except TypeError as e:
+            logging.warn(f"{self.func_path} failed: {repr(e)}")
 
 
 class PsutilTask(Task):
@@ -80,7 +83,7 @@ class PsutilTask(Task):
         psutil._common.scpufreq
         result = super().exec()
 
-        if type(result) in [int, float, str]:
+        if type(result) in [int, float, str, list, dict]:
             return json.dumps(result)
         elif isinstance(result, tuple):
             # is _asdict and _field is present -> namedtuple
@@ -125,7 +128,11 @@ if __name__ == "__main__":
         vars = {k: literal_eval(v) for k, v in config.items(sec)}
 
         if sec.startswith("psutil."):
-            tasks.append(PsutilTask(sec, mqtt_c=mqtt_c, **vars))
+            try:
+                task = PsutilTask(sec, mqtt_c=mqtt_c, **vars)
+                tasks.append(task)
+            except TypeError as e:
+                logging.warning(f"skipping {sec}: {repr(e)}")
 
     running = True
     while running:
