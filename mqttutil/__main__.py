@@ -1,6 +1,5 @@
 import argparse
 import configparser
-import inspect
 import json
 import logging
 import platform
@@ -13,13 +12,21 @@ import psutil
 import schedule
 from pytimeparse.timeparse import timeparse
 
-parser = argparse.ArgumentParser("mqttutil", description="publish system information via mqtt")
+parser = argparse.ArgumentParser("mqttutil",
+                                 description="publish system information via mqtt",
+                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                 )
 parser.add_argument("-c", "--config", help="configuration file", type=str, default="etc/mqttutil.conf")
 parser.add_argument("-v", "--verbose", help="increase output verbosity", action="count", default=0)
 
+publish_options = parser.add_argument_group("mqtt")
+publish_options.add_argument("--mqtt-host", help="hostname of mqtt broker", default="localhost", type=str)
+publish_options.add_argument("--mqtt-port", help="port of mqtt broker", default=1883, type=int)
+publish_options.add_argument("--mqtt-prefix", help="mqtt prefix to use for publishing", default=platform.node(), type=str)
+
 
 class Task:
-    def __init__(self, func: Callable, func_path: str, scheduling_interval: str, mqtt_c: mqtt.Client, mqtt_prefix: str = platform.node(), **kwargs):
+    def __init__(self, func: Callable, func_path: str, scheduling_interval: str, mqtt_c: mqtt.Client, mqtt_prefix: str, **kwargs):
         super().__init__()
 
         # text function
@@ -110,30 +117,16 @@ if __name__ == "__main__":
     tasks = []
 
     # get mqtt config
-    mqtt_args = dict(config.items("mqtt"))
-
-    # paho mqtt does not ignore unused arguments, hence the non-matching need to be ignored
-    init_args = {k: literal_eval(v)
-                 for k, v in mqtt_args.items()
-                 if k in inspect.signature(mqtt.Client.__init__).parameters}
-    mqtt_c = mqtt.Client(**init_args)
-
-    connect_args = {k: literal_eval(v)
-                    for k, v in mqtt_args.items()
-                    if k in inspect.signature(mqtt_c.connect).parameters}
-    mqtt_c.connect(**connect_args)
+    mqtt_c = mqtt.Client()
+    mqtt_c.connect(args.mqtt_host, args.mqtt_port)
 
     # look for known sections
     for sec in config.sections():
-        # ignore general purpose configuration options
-        if sec in ["mqtt"]:
-            continue
-
         vars = {k: literal_eval(v) for k, v in config.items(sec)}
 
         if sec.startswith("psutil."):
             try:
-                task = PsutilTask(sec, mqtt_c=mqtt_c, **vars)
+                task = PsutilTask(sec, mqtt_c=mqtt_c, mqtt_prefix=args.mqtt_prefix, **vars)
                 tasks.append(task)
             except TypeError as e:
                 logging.warning(f"skipping {sec}: {repr(e)}")
