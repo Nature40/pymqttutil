@@ -5,10 +5,9 @@ import logging
 import platform
 import time
 from ast import literal_eval
-from typing import Callable
+from typing import List
 
 import paho.mqtt.client as mqtt
-import psutil
 import schedule
 from pytimeparse.timeparse import timeparse
 
@@ -26,29 +25,28 @@ publish_options.add_argument("--mqtt-prefix", help="mqtt prefix to use for publi
 
 
 class Task:
-    def __init__(self, func: Callable, func_path: str, scheduling_interval: str, mqtt_c: mqtt.Client, mqtt_prefix: str, **kwargs):
+    def __init__(self, func_str: str, mqtt_c: mqtt.Client, mqtt_prefix: str, scheduling_interval: str, **kwargs):
         super().__init__()
 
         # text function
-        self.func = func
-        self.func_path = func_path
-        self.kwargs = kwargs
-        self.exec()
+        self.func_str = func_str
+        result = self._eval()
 
         # set mqtt
         self.mqtt_c = mqtt_c
         self.mqtt_prefix = mqtt_prefix
-        self.mqtt_suffix = func_path.replace(".", "/")
+        self.mqtt_suffix = func_str.replace(".", "/")
 
         # test publish
-        self.publish()
+        processed = self._process(result)
+        self._publish(processed)
 
         # add to schedule
         self.scheduling_interval_s = timeparse(scheduling_interval)
-        schedule.every(self.scheduling_interval_s).seconds.do(Task.publish, self)
+        schedule.every(self.scheduling_interval_s).seconds.do(Task.run, self)
 
     def __repr__(self):
-        return self.func.__repr__()
+        return f"{self.__class__.__name__}('{self.func_str}')"
 
     @property
     def mqtt_topic(self):
@@ -59,47 +57,48 @@ class Task:
         else:
             return self.mqtt_prefix + "/" + self.mqtt_suffix
 
-    def exec(self):
-        result = self.func(**self.kwargs)
-        logging.debug(f"exec {self.func_path}({', '.join([k+'='+repr(v) for k,v in self.kwargs.items()])}) = {result}")
+    def _eval(self):
+        result = eval(self.func_str)
+        logging.debug(f"exec {self.func_str} = {result}")
         return result
 
-    def publish(self):
-        try:
-            result = self.exec()
-            logging.info(f"publish {result} -> {self.mqtt_topic}")
-            self.mqtt_c.publish(self.mqtt_topic, result)
-        except TypeError as e:
-            logging.warn(f"{self.func_path} failed: {repr(e)}")
+    @staticmethod
+    def _process(result):
+        # return primitive types directly
+        if result is None:
+            return result
+        elif type(result) in [int, float, str]:
+            return result
 
+        # return members of list, dict, tuple processed recursively
+        elif isinstance(result, list):
+            return [Task._process(item) for item in result]
 
-class PsutilTask(Task):
-    PREFIX = "psutil."
+        elif isinstance(result, dict):
+            return {k: Task._process(v) for k, v in result.items()}
 
-    def __init__(self, func_path: str, **kwargs):
-        if not func_path.startswith(PsutilTask.PREFIX):
-            raise ValueError(f"Function '{func_path}' is not supported.")
-
-        # lookup function name in psutil module
-        _, func_name = func_path.split(".")
-        func = psutil.__dict__[func_name]
-
-        super().__init__(func, func_path=func_path, **kwargs)
-
-    def exec(self):
-        psutil._common.scpufreq
-        result = super().exec()
-
-        if type(result) in [int, float, str, list, dict]:
-            return json.dumps(result)
         elif isinstance(result, tuple):
-            # is _asdict and _field is present -> namedtuple
+            # if _asdict and _field is present -> namedtuple
             if hasattr(result, '_asdict') and hasattr(result, '_fields'):
-                return json.dumps(result._asdict())
+                return Task._process(result._asdict())
             else:
-                return json.dumps(result)
+                return Task._process(list(result))
+        # if type is not handled explicitly, return result
         else:
-            raise TypeError(f"{type(result)} is not supported")
+            return result
+
+    def _publish(self, processed):
+        try:
+            marshalled = json.dumps(processed)
+            logging.info(f"publish {marshalled} -> {self.mqtt_topic}")
+            self.mqtt_c.publish(self.mqtt_topic, marshalled)
+        except TypeError as e:
+            logging.warning(f"{self.func_str} failed: {repr(e)}")
+
+    def run(self):
+        result = self._eval()
+        processed = self._process(result)
+        self._publish(processed)
 
 
 if __name__ == "__main__":
@@ -109,31 +108,34 @@ if __name__ == "__main__":
     logging_level = max(0, logging.WARN - (args.verbose * 10))
     logging.basicConfig(level=logging_level)
 
+    # get mqtt config
+    mqtt_c = mqtt.Client()
+    mqtt_c.connect(args.mqtt_host, args.mqtt_port)
+
     # parse config
     config = configparser.ConfigParser()
     config.read(args.config)
 
-    # tasks
-    tasks = []
+    # import requested modules
+    imports = literal_eval(config["DEFAULT"]["imports"])
+    for imp in imports:
+        logging.info(f"importing module {imp}")
+        globals()[imp] = __import__(imp)
 
-    # get mqtt config
-    mqtt_c = mqtt.Client()
-    mqtt_c.connect(args.mqtt_host, args.mqtt_port)
+    # tasks
+    tasks: List[Task] = []
 
     # look for known sections
     for sec in config.sections():
         vars = {k: literal_eval(v) for k, v in config.items(sec)}
 
-        if sec.startswith("psutil."):
-            try:
-                task = PsutilTask(sec, mqtt_c=mqtt_c, mqtt_prefix=args.mqtt_prefix, **vars)
-                tasks.append(task)
-            except TypeError as e:
-                logging.warning(f"skipping {sec}: {repr(e)}")
-
-            continue
-
-        logging.warning(f"unknown task [{sec}], skipping.")
+        # create and append task object
+        try:
+            task = Task(sec, mqtt_c, args.mqtt_prefix, **vars)
+            tasks.append(task)
+        except Exception as e:
+            logging.critical(f"{sec}: {repr(e)}, exiting.")
+            exit(1)
 
     if not tasks:
         logging.critical("No valid tasks specified, exiting.")
