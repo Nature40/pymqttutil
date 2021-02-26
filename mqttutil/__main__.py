@@ -123,8 +123,12 @@ if __name__ == "__main__":
                     if k in inspect.signature(mqtt_c.connect).parameters}
     mqtt_c.connect(**connect_args)
 
-    # look for known sectionss
+    # look for known sections
     for sec in config.sections():
+        # ignore general purpose configuration options
+        if sec in ["mqtt"]:
+            continue
+
         vars = {k: literal_eval(v) for k, v in config.items(sec)}
 
         if sec.startswith("psutil."):
@@ -133,6 +137,14 @@ if __name__ == "__main__":
                 tasks.append(task)
             except TypeError as e:
                 logging.warning(f"skipping {sec}: {repr(e)}")
+
+            continue
+
+        logging.warning(f"unknown task [{sec}], skipping.")
+
+    if not tasks:
+        logging.critical("No valid tasks specified, exiting.")
+        exit(1)
 
     running = True
     while running:
