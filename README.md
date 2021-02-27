@@ -6,7 +6,7 @@ Publish system information via MQTT.
 
 ```
 $ python3 -m mqttutil --help
-usage: mqttutil [-h] [-c CONFIG] [-v] [--mqtt-host MQTT_HOST] [--mqtt-port MQTT_PORT] [--mqtt-prefix MQTT_PREFIX]
+usage: mqttutil [-h] [-c CONFIG] [-v] [--mqtt-host MQTT_HOST] [--mqtt-port MQTT_PORT]
 
 publish system information via mqtt
 
@@ -21,25 +21,46 @@ mqtt:
                         hostname of mqtt broker (default: localhost)
   --mqtt-port MQTT_PORT
                         port of mqtt broker (default: 1883)
-  --mqtt-prefix MQTT_PREFIX
-                        mqtt prefix to use for publishing (default: $HOSTNAME)
+
 ```
 
 ## Configuration
 
-mqttutil's configuration consists of two parts. The `[DEFAULT]` section is evaluated and used in all latter defined tasks.
+mqttutil's configuration consists of tasks defined in individual sections, e.g.:
+
+```ini
+[announce]
+func = "platform.node()"
+scheduling_interval = "1s"
+topic_prefix = ""
+requires = ["platform"]
+```
+
+In the example above the python statement `platform.node()` is evaluated once per second and published to the `announce` topic. The parameters `topic_prefix` as well as `requires` are optional. `topic_prefix` defaults to the hostname, if not defined. 
+
+The parameter `requires` can be used to import additonal modules, such as the [psutil module](https://psutil.readthedocs.io/en/latest/). 
+
+```ini
+[load]
+func = "psutil.getloadavg()"
+scheduling_interval = "5s"
+```
+
+### DEFAULT section 
+
+The `DEFAULT` section allows to initialize the parameters for all sections. Note that the `topic_prefix` option is initialized globally by the hostname, and is not required to be set.
 
 ```ini
 [DEFAULT]
 scheduling_interval = "5s"
+
+[announce]
+func = "platform.node()"
+topic_prefix = ""
+
+[unixtime]
+func = "time.time()"
+requires = ["time"]
 ```
 
-The sections following the pattern `[psutil.*]` are interpreted functions in the [psutil module](https://psutil.readthedocs.io/en/latest/). The parameters are handed over as the function is called.
-
-```ini
-[psutil.cpu_percent]
-interval = 0.1
-percpu = False
-```
-
-An example configuration file is provided in [etc/mqttutil.conf](etc/mqttutil.conf)
+A comprehensive example configuration file is provided at [etc/mqttutil.conf](etc/mqttutil.conf).

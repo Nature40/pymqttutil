@@ -1,6 +1,5 @@
 import argparse
 import configparser
-import json
 import logging
 import platform
 import time
@@ -21,25 +20,37 @@ parser.add_argument("-v", "--verbose", help="increase output verbosity", action=
 publish_options = parser.add_argument_group("mqtt")
 publish_options.add_argument("--mqtt-host", help="hostname of mqtt broker", default="localhost", type=str)
 publish_options.add_argument("--mqtt-port", help="port of mqtt broker", default=1883, type=int)
-publish_options.add_argument("--mqtt-prefix", help="mqtt prefix to use for publishing", default=platform.node(), type=str)
+
+logger = logging.getLogger("mqttutil")
 
 
 class Task:
-    def __init__(self, func_str: str, mqtt_c: mqtt.Client, mqtt_prefix: str, scheduling_interval: str, **kwargs):
+    def __init__(self,
+                 mqtt_c: mqtt.Client,
+                 topic: str,
+                 func: str,
+                 scheduling_interval: str,
+                 topic_prefix: str = platform.node(),
+                 requires: List[str] = [],
+                 **kwargs):
         super().__init__()
 
+        for imp in requires:
+            if imp not in globals():
+                logger.info(f"importing module {imp}")
+                globals()[imp] = __import__(imp)
+
         # text function
-        self.func_str = func_str
+        self.func_str = func
         result = self._eval()
 
         # set mqtt
         self.mqtt_c = mqtt_c
-        self.mqtt_prefix = mqtt_prefix
-        self.mqtt_suffix = func_str.replace(".", "/")
+        self.topic_prefix = topic_prefix
+        self.topic_suffix = topic
 
         # test publish
-        processed = self._process(result)
-        self._publish(processed)
+        self._publish(self.topic, result)
 
         # add to schedule
         self.scheduling_interval_s = timeparse(scheduling_interval)
@@ -49,64 +60,61 @@ class Task:
         return f"{self.__class__.__name__}('{self.func_str}')"
 
     @property
-    def mqtt_topic(self):
-        if not self.mqtt_prefix:
-            return self.mqtt_suffix
-        elif self.mqtt_prefix.endswith("/"):
-            return self.mqtt_prefix + self.mqtt_suffix
+    def topic(self):
+        if not self.topic_prefix:
+            return self.topic_suffix
+        elif self.topic_prefix.endswith("/"):
+            return self.topic_prefix + self.topic_suffix
         else:
-            return self.mqtt_prefix + "/" + self.mqtt_suffix
+            return self.topic_prefix + "/" + self.topic_suffix
 
     def _eval(self):
         result = eval(self.func_str)
-        logging.debug(f"exec {self.func_str} = {result}")
+        logger.debug(f"exec {self.func_str} = {result}")
         return result
 
-    @staticmethod
-    def _process(result):
-        # return primitive types directly
+    def _publish(self, topic: str, result):
+        # don't publish Nones
         if result is None:
-            return result
+            return
+
+        # publish primitive data directly
         elif type(result) in [int, float, str]:
-            return result
+            logger.info(f"publish {topic} {result}")
+            self.mqtt_c.publish(topic, result)
 
-        # return members of list, dict, tuple processed recursively
-        elif isinstance(result, list):
-            return [Task._process(item) for item in result]
-
+        # expand dict by keys
         elif isinstance(result, dict):
-            return {k: Task._process(v) for k, v in result.items()}
+            for k, v in result.items():
+                self._publish(f"{topic}/{k}", v)
+
+        # iterate list (via dict conversion)
+        elif isinstance(result, list):
+            self._publish(topic, dict(enumerate(result)))
 
         elif isinstance(result, tuple):
-            # if _asdict and _field is present -> namedtuple
+            # recurse as dict for namedtuple
             if hasattr(result, '_asdict') and hasattr(result, '_fields'):
-                return Task._process(result._asdict())
+                self._publish(topic, result._asdict())
+            # iterate regular tuple (via dict conversion)
             else:
-                return Task._process(list(result))
-        # if type is not handled explicitly, return result
-        else:
-            return result
+                self._publish(topic, dict(enumerate(result)))
 
-    def _publish(self, processed):
-        try:
-            marshalled = json.dumps(processed)
-            logging.info(f"publish {marshalled} -> {self.mqtt_topic}")
-            self.mqtt_c.publish(self.mqtt_topic, marshalled)
-        except TypeError as e:
-            logging.warning(f"{self.func_str} failed: {repr(e)}")
+        # print info on unknown result types
+        else:
+            logger.warning(f"type {type(result)} is not supported. ({topic})")
 
     def run(self):
         result = self._eval()
-        processed = self._process(result)
-        self._publish(processed)
+        self._publish(self.topic, result)
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
 
-    # setup logging
-    logging_level = max(0, logging.WARN - (args.verbose * 10))
-    logging.basicConfig(level=logging_level)
+    # setup logger
+    logger_level = max(0, logging.WARN - (args.verbose * 10))
+    logging.basicConfig(level=logger_level)
 
     # get mqtt config
     mqtt_c = mqtt.Client()
@@ -116,29 +124,16 @@ if __name__ == "__main__":
     config = configparser.ConfigParser()
     config.read(args.config)
 
-    # import requested modules
-    imports = literal_eval(config["DEFAULT"]["imports"])
-    for imp in imports:
-        logging.info(f"importing module {imp}")
-        globals()[imp] = __import__(imp)
-
     # tasks
     tasks: List[Task] = []
 
     # look for known sections
-    for sec in config.sections():
-        vars = {k: literal_eval(v) for k, v in config.items(sec)}
-
-        # create and append task object
-        try:
-            task = Task(sec, mqtt_c, args.mqtt_prefix, **vars)
-            tasks.append(task)
-        except Exception as e:
-            logging.critical(f"{sec}: {repr(e)}, exiting.")
-            exit(1)
+    for topic in config.sections():
+        vars = {k: literal_eval(v) for k, v in config.items(topic)}
+        tasks.append(Task(mqtt_c, topic, **vars))
 
     if not tasks:
-        logging.critical("No valid tasks specified, exiting.")
+        logger.critical("No valid tasks specified, exiting.")
         exit(1)
 
     running = True
