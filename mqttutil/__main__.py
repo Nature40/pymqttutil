@@ -30,7 +30,7 @@ class Task:
                  topic: str,
                  func: str,
                  scheduling_interval: str,
-                 topic_prefix: str = platform.node(),
+                 topic_prefix: str = f"{platform.node()}/mqttutil",
                  requires: List[str] = [],
                  **kwargs):
         super().__init__()
