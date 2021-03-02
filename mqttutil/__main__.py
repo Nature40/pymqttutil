@@ -1,5 +1,6 @@
 import argparse
 import configparser
+import json
 import logging
 import platform
 import time
@@ -20,6 +21,7 @@ parser.add_argument("-v", "--verbose", help="increase output verbosity", action=
 publish_options = parser.add_argument_group("mqtt")
 publish_options.add_argument("--mqtt-host", help="hostname of mqtt broker", default="localhost", type=str)
 publish_options.add_argument("--mqtt-port", help="port of mqtt broker", default=1883, type=int)
+publish_options.add_argument("--json", help="publish json dict instead of primitive datatypes", action="store_true", default=False)
 
 logger = logging.getLogger("mqttutil")
 
@@ -27,6 +29,7 @@ logger = logging.getLogger("mqttutil")
 class Task:
     def __init__(self,
                  mqtt_c: mqtt.Client,
+                 json: bool,
                  topic: str,
                  func: str,
                  scheduling_interval: str,
@@ -46,6 +49,7 @@ class Task:
 
         # set mqtt
         self.mqtt_c = mqtt_c
+        self.json = json
         self.topic_prefix = topic_prefix
         self.topic_suffix = topic
 
@@ -74,6 +78,13 @@ class Task:
         return result
 
     def _publish(self, topic: str, result):
+        # if json mode is set, publish json dict instead of primitive datatypes
+        if self.json:
+            result_json = json.dumps(result)
+            logger.info(f"publish {topic} {result_json}")
+            self.mqtt_c.publish(topic, result_json)
+            return
+
         # don't publish Nones
         if result is None:
             return
@@ -130,7 +141,7 @@ if __name__ == "__main__":
     # look for known sections
     for topic in config.sections():
         vars = {k: literal_eval(v) for k, v in config.items(topic)}
-        tasks.append(Task(mqtt_c, topic, **vars))
+        tasks.append(Task(mqtt_c, args.json, topic, **vars))
 
     if not tasks:
         logger.critical("No valid tasks specified, exiting.")
