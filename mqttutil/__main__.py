@@ -80,7 +80,15 @@ class Task:
     def _publish(self, topic: str, result):
         # if json mode is set, publish json dict instead of primitive datatypes
         if self.json:
-            result_json = json.dumps(result)
+            if isinstance(result, dict):
+                result_json = json.dumps(result)
+            elif isinstance(result, tuple) and hasattr(result, '_asdict'):
+                result_json = json.dumps(result._asdict())
+            elif isinstance(result, tuple) or isinstance(result, list):
+                result_json = json.dumps(dict(enumerate(result)))
+            else:
+                result_json = json.dumps({0: result})
+
             logger.info(f"publish {topic} {result_json}")
             self.mqtt_c.publish(topic, result_json)
             return
