@@ -35,6 +35,7 @@ class Task:
                  scheduling_interval: str,
                  topic_prefix: str = f"{platform.node()}/mqttutil",
                  requires: List[str] = [],
+                 qos: int = 0,
                  **kwargs):
         super().__init__()
 
@@ -52,6 +53,7 @@ class Task:
         self.json = json
         self.topic_prefix = topic_prefix
         self.topic_suffix = topic
+        self.qos = qos
 
         # test publish
         self._publish(self.topic, result)
@@ -90,7 +92,7 @@ class Task:
                 result_json = json.dumps({0: result})
 
             logger.info(f"publish {topic} {result_json}")
-            self.mqtt_c.publish(topic, result_json)
+            self.mqtt_c.publish(topic, result_json, qos=self.qos)
             return
 
         # don't publish Nones
@@ -100,7 +102,7 @@ class Task:
         # publish primitive data directly
         elif type(result) in [int, float, str]:
             logger.info(f"publish {topic} {result}")
-            self.mqtt_c.publish(topic, result)
+            self.mqtt_c.publish(topic, result, qos=self.qos)
 
         # expand dict by keys
         elif isinstance(result, dict):
@@ -136,7 +138,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logger_level)
 
     # get mqtt config
-    mqtt_c = mqtt.Client()
+    mqtt_c = mqtt.Client(client_id=f"{platform.node()}-mqttutil", clean_session=False)
     mqtt_c.connect(args.mqtt_host, args.mqtt_port)
 
     # parse config
@@ -153,6 +155,9 @@ if __name__ == "__main__":
             tasks.append(Task(mqtt_c, args.json, topic, **vars))
         except Exception as e:
             logger.warning(f"Task '{topic}' cannot be created: {repr(e)}")
+
+    mqtt_c._keepalive = min([t.scheduling_interval_s for t in tasks])
+    mqtt_c.reconnect()
 
     if not tasks:
         logger.critical("No valid tasks specified, exiting.")
