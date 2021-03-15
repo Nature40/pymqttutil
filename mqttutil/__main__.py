@@ -149,7 +149,10 @@ if __name__ == "__main__":
     # look for known sections
     for topic in config.sections():
         vars = {k: literal_eval(v) for k, v in config.items(topic)}
-        tasks.append(Task(mqtt_c, args.json, topic, **vars))
+        try:
+            tasks.append(Task(mqtt_c, args.json, topic, **vars))
+        except Exception as e:
+            logger.warning(f"Task '{topic}' cannot be created: {repr(e)}")
 
     if not tasks:
         logger.critical("No valid tasks specified, exiting.")
