@@ -140,6 +140,7 @@ if __name__ == "__main__":
     # get mqtt config
     mqtt_c = mqtt.Client(client_id=f"{platform.node()}-mqttutil", clean_session=False)
     mqtt_c.connect(args.mqtt_host, args.mqtt_port)
+    mqtt_c.loop_start()
 
     # parse config
     config = configparser.ConfigParser()
