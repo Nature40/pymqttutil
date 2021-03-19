@@ -36,6 +36,7 @@ class Task:
                  topic_prefix: str = f"{platform.node()}/mqttutil",
                  requires: List[str] = [],
                  qos: int = 0,
+                 test: bool = True,
                  **kwargs):
         super().__init__()
 
@@ -46,7 +47,6 @@ class Task:
 
         # text function
         self.func_str = func
-        result = self._eval()
 
         # set mqtt
         self.mqtt_c = mqtt_c
@@ -55,8 +55,8 @@ class Task:
         self.topic_suffix = topic
         self.qos = qos
 
-        # test publish
-        self._publish(self.topic, result)
+        if test:
+            self.run()
 
         # add to schedule
         self.scheduling_interval_s = timeparse(scheduling_interval)
@@ -75,8 +75,8 @@ class Task:
             return self.topic_prefix + "/" + self.topic_suffix
 
     def _eval(self):
+        logger.debug(f"exec {self.func_str}")
         result = eval(self.func_str)
-        logger.debug(f"exec {self.func_str} = {result}")
         return result
 
     def _publish(self, topic: str, result):
@@ -167,4 +167,7 @@ if __name__ == "__main__":
     running = True
     while running:
         time.sleep(1)
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            logging.warning(f"Taks execution failed: {repr(e)}")
