@@ -56,7 +56,8 @@ class Task:
         self.qos = qos
 
         if test:
-            self.run()
+            result = self._eval()
+            self._publish(self.topic, result)
 
         # add to schedule
         self.scheduling_interval_s = timeparse(scheduling_interval)
@@ -126,8 +127,11 @@ class Task:
             logger.warning(f"type {type(result)} is not supported. ({topic})")
 
     def run(self):
-        result = self._eval()
-        self._publish(self.topic, result)
+        try:
+            result = self._eval()
+            self._publish(self.topic, result)
+        except Exception as e:
+            logging.warning(f"Task [{self.topic_suffix}] failed: {repr(e)}")
 
 
 if __name__ == "__main__":
@@ -167,7 +171,4 @@ if __name__ == "__main__":
     running = True
     while running:
         time.sleep(1)
-        try:
-            schedule.run_pending()
-        except Exception as e:
-            logging.warning(f"Taks execution failed: {repr(e)}")
+        schedule.run_pending()
