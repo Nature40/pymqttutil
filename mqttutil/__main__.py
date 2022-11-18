@@ -131,7 +131,8 @@ class Task:
             result = self._eval()
             self._publish(self.topic, result)
         except Exception as e:
-            logging.warning(f"Task [{self.topic_suffix}] failed: {repr(e)}")
+            logger.warning(f"Task [{self.topic_suffix}] failed:")
+            logger.exception(e)
 
 
 if __name__ == "__main__":
@@ -159,7 +160,8 @@ if __name__ == "__main__":
         try:
             tasks.append(Task(mqtt_c, args.json, topic, **vars))
         except Exception as e:
-            logger.warning(f"Task '{topic}' cannot be created: {repr(e)}")
+            logger.warning(f"Task '{topic}' cannot be created:")
+            logger.exception(e)
 
     mqtt_c._keepalive = min([t.scheduling_interval_s for t in tasks])
     mqtt_c.reconnect()
